@@ -84,7 +84,7 @@ bool esti_plane(Matrix<T, 4, 1>& pca_result,
   b.setOnes();
   b *= -1.0f;
 
-  // 求A/Dx + B/Dy + C/Dz + 1 = 0 的参数
+  // A/Dx + B/Dy + C/Dz + 1 = 0 의 파라미터 구하기
   for (int j = 0; j < NUM_MATCH_POINTS; j++) {
     A(j, 0) = point[j].x;
     A(j, 1) = point[j].y;
@@ -94,13 +94,13 @@ bool esti_plane(Matrix<T, 4, 1>& pca_result,
   Matrix<T, 3, 1> normvec = A.colPivHouseholderQr().solve(b);
 
   T n = normvec.norm();
-  // pca_result是平面方程的4个参数  /n是为了归一化
+  // pca_result는 평면 방정식의 4개 파라미터, /n은 정규화를 위함
   pca_result(0) = normvec(0) / n;
   pca_result(1) = normvec(1) / n;
   pca_result(2) = normvec(2) / n;
   pca_result(3) = 1.0 / n;
 
-  // 如果几个点中有距离该平面>threshold的点 认为是不好的平面 返回false
+  // 여러 포인트 중 해당 평면까지의 거리가 threshold보다 큰 포인트가 있으면 좋지 않은 평면으로 간주하고 false 반환
   for (int j = 0; j < NUM_MATCH_POINTS; j++) {
     if (fabs(pca_result(0) * point[j].x + pca_result(1) * point[j].y +
              pca_result(2) * point[j].z + pca_result(3)) > threshold) {

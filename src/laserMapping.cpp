@@ -70,9 +70,9 @@ deque<sensor_msgs::Imu::ConstPtr> imu_buffer;
 PointCloudXYZI::Ptr featsFromMap(new PointCloudXYZI());
 PointCloudXYZI::Ptr feats_undistort(new PointCloudXYZI());
 PointCloudXYZI::Ptr feats_down_body(
-    new PointCloudXYZI());  // 畸变纠正后降采样的单帧点云，lidar系
+    new PointCloudXYZI());  // 왜곡 보정 후 다운샘플링된 단일 프레임 포인트 클라우드, lidar 좌표계
 PointCloudXYZI::Ptr feats_down_world(
-    new PointCloudXYZI());  // 畸变纠正后降采样的单帧点云，W系
+    new PointCloudXYZI());  // 왜곡 보정 후 다운샘플링된 단일 프레임 포인트 클라우드, 월드 좌표계
 
 pcl::VoxelGrid<PointType> downSizeFilterSurf;
 pcl::VoxelGrid<PointType> downSizeFilterMap;
@@ -89,7 +89,7 @@ MeasureGroup Measures;
 esekfom::esekf kf;
 
 state_ikfom state_point;
-Eigen::Vector3d pos_lid;  // 估计的W系下的位置
+Eigen::Vector3d pos_lid;  // 추정된 월드 좌표계 하의 위치
 
 nav_msgs::Path path;
 nav_msgs::Odometry odomAftMapped;
@@ -188,7 +188,7 @@ void imu_cbk(const sensor_msgs::Imu::ConstPtr& msg_in) {
 
 double lidar_mean_scantime = 0.0;
 int scan_num = 0;
-// 把当前要处理的LIDAR和IMU数据打包到meas
+// 현재 처리할 LIDAR와 IMU 데이터를 meas에 패키징
 bool sync_packages(MeasureGroup& meas) {
   if (lidar_buffer.empty() || imu_buffer.empty()) {
     return false;
@@ -212,7 +212,7 @@ bool sync_packages(MeasureGroup& meas) {
       lidar_mean_scantime +=
           (meas.lidar->points.back().curvature / double(1000) -
            lidar_mean_scantime) /
-          scan_num;  // 注意curvature中存储的是相对第一个点的时间
+          scan_num;  // 주의: curvature에는 첫 번째 포인트에 대한 상대 시간이 저장됨
     }
 
     meas.lidar_end_time = lidar_end_time;
@@ -221,7 +221,7 @@ bool sync_packages(MeasureGroup& meas) {
   }
 
   if (last_timestamp_imu <
-      lidar_end_time)  // 如果最新的imu时间戳都<雷达最终的时间，证明还没有收集足够的imu数据，break
+      lidar_end_time)  // 최신 imu 타임스탬프가 라이다 종료 시간보다 작으면, 충분한 imu 데이터를 수집하지 못했음을 의미, break
   {
     return false;
   }
@@ -280,21 +280,21 @@ void RGBpointBodyLidarToIMU(PointType const* const pi, PointType* const po) {
   po->intensity = pi->intensity;
 }
 
-// 根据最新估计位姿  增量添加点云到map
+// 최신 추정 자세에 따라 점진적으로 포인트 클라우드를 맵에 추가
 void map_incremental() {
   PointVector PointToAdd;
   PointVector PointNoNeedDownsample;
   PointToAdd.reserve(feats_down_size);
   PointNoNeedDownsample.reserve(feats_down_size);
   for (int i = 0; i < feats_down_size; i++) {
-    // 转换到世界坐标系
+    // 월드 좌표계로 변환
     pointBodyToWorld(&(feats_down_body->points[i]),
                      &(feats_down_world->points[i]));
 
     if (!Nearest_Points[i].empty() && flg_EKF_inited) {
       const PointVector& points_near = Nearest_Points[i];
       bool need_add = true;
-      PointType mid_point;  // 点所在体素的中心
+      PointType mid_point;  // 포인트가 위치한 복셀의 중심
       mid_point.x = floor(feats_down_world->points[i].x / filter_size_map_min) *
                         filter_size_map_min +
                     0.5 * filter_size_map_min;
@@ -310,14 +310,14 @@ void map_incremental() {
           fabs(points_near[0].z - mid_point.z) > 0.5 * filter_size_map_min) {
         PointNoNeedDownsample.push_back(
             feats_down_world->points
-                [i]);  // 如果距离最近的点都在体素外，则该点不需要Downsample
+                [i]);  // 가장 가까운 포인트가 복셀 밖에 있으면, 해당 포인트는 다운샘플링 불필요
         continue;
       }
       for (int j = 0; j < NUM_MATCH_POINTS; j++) {
         if (points_near.size() < NUM_MATCH_POINTS)
           break;
         if (calc_dist(points_near[j], mid_point) <
-            dist)  // 如果近邻点距离 < 当前点距离，不添加该点
+            dist)  // 근접 포인트 거리가 현재 포인트 거리보다 작으면, 해당 포인트 추가하지 않음
         {
           need_add = false;
           break;
@@ -481,60 +481,60 @@ int main(int argc, char** argv) {
 
   nh.param<bool>("publish/path_en", path_en, true);
   nh.param<bool>("publish/scan_publish_en", scan_pub_en,
-                 true);  // 是否发布当前正在扫描的点云的topic
+                 true);  // 현재 스캔 중인 포인트 클라우드의 토픽 발행 여부
   nh.param<bool>("publish/dense_publish_en", dense_pub_en,
-                 true);  // 是否发布经过运动畸变校正注册到IMU坐标系的点云的topic
+                 true);  // 모션 왜곡 보정 후 IMU 좌표계로 등록된 포인트 클라우드의 토픽 발행 여부
   nh.param<bool>(
       "publish/scan_bodyframe_pub_en", scan_body_pub_en,
-      true);  // 是否发布经过运动畸变校正注册到IMU坐标系的点云的topic，需要该变量和上一个变量同时为true才发布
+      true);  // 모션 왜곡 보정 후 IMU 좌표계로 등록된 포인트 클라우드의 토픽 발행 여부, 이 변수와 이전 변수가 모두 true일 때만 발행
   nh.param<int>("max_iteration", NUM_MAX_ITERATIONS,
-                4);  // 卡尔曼滤波的最大迭代次数
-  nh.param<string>("map_file_path", map_file_path, "");  // 地图保存路径
+                4);  // 칼만 필터의 최대 반복 횟수
+  nh.param<string>("map_file_path", map_file_path, "");  // 맵 저장 경로
   nh.param<string>("common/lid_topic", lid_topic,
-                   "/livox/lidar");  // 雷达点云topic名称
+                   "/livox/lidar");  // 라이다 포인트 클라우드 토픽 이름
   nh.param<string>("common/imu_topic", imu_topic,
-                   "/livox/imu");  // IMU的topic名称
+                   "/livox/imu");  // IMU의 토픽 이름
   nh.param<bool>(
       "common/time_sync_en", time_sync_en,
-      false);  // 是否需要时间同步，只有当外部未进行时间同步时设为true
+      false);  // 시간 동기화 필요 여부, 외부에서 시간 동기화가 이루어지지 않을 때만 true로 설정
   nh.param<double>("common/time_offset_lidar_to_imu", time_diff_lidar_to_imu,
                    0.0);
   nh.param<double>("filter_size_corner", filter_size_corner_min,
-                   0.5);  // VoxelGrid降采样时的体素大小
+                   0.5);  // VoxelGrid 다운샘플링 시 복셀 크기
   nh.param<double>("filter_size_surf", filter_size_surf_min, 0.5);
   nh.param<double>("filter_size_map", filter_size_map_min, 0.5);
   nh.param<double>("cube_side_length", cube_len,
-                   200);  // 地图的局部区域的长度（FastLio2论文中有解释）
+                   200);  // 맵의 로컬 영역 길이 (FastLio2 논문 참조)
   nh.param<float>("mapping/det_range", DET_RANGE,
-                  300.f);  // 激光雷达的最大探测范围
+                  300.f);  // 레이저 라이다의 최대 탐지 범위
   nh.param<double>("mapping/fov_degree", fov_deg, 180);
-  nh.param<double>("mapping/gyr_cov", gyr_cov, 0.1);  // IMU陀螺仪的协方差
-  nh.param<double>("mapping/acc_cov", acc_cov, 0.1);  // IMU加速度计的协方差
+  nh.param<double>("mapping/gyr_cov", gyr_cov, 0.1);  // IMU 자이로스코프의 공분산
+  nh.param<double>("mapping/acc_cov", acc_cov, 0.1);  // IMU 가속도계의 공분산
   nh.param<double>("mapping/b_gyr_cov", b_gyr_cov,
-                   0.0001);  // IMU陀螺仪偏置的协方差
+                   0.0001);  // IMU 자이로스코프 바이어스의 공분산
   nh.param<double>("mapping/b_acc_cov", b_acc_cov,
-                   0.0001);  // IMU加速度计偏置的协方差
+                   0.0001);  // IMU 가속도계 바이어스의 공분산
   nh.param<double>("preprocess/blind", p_pre->blind,
-                   0.01);  // 最小距离阈值，即过滤掉0～blind范围内的点云
+                   0.01);  // 최소 거리 임계값, 즉 0~blind 범위 내의 포인트 클라우드 필터링
   nh.param<int>("preprocess/lidar_type", p_pre->lidar_type,
-                AVIA);  // 激光雷达的类型
+                AVIA);  // 레이저 라이다의 타입
   nh.param<int>("preprocess/scan_line", p_pre->N_SCANS,
-                16);  // 激光雷达扫描的线数（livox avia为6线）
+                16);  // 레이저 라이다 스캔 라인 수 (livox avia는 6선)
   nh.param<int>("preprocess/timestamp_unit", p_pre->time_unit, US);
   nh.param<int>("preprocess/scan_rate", p_pre->SCAN_RATE, 10);
   nh.param<int>("point_filter_num", p_pre->point_filter_num,
-                2);  // 采样间隔，即每隔point_filter_num个点取1个点
+                2);  // 샘플링 간격, 즉 point_filter_num개의 포인트마다 1개의 포인트 선택
   nh.param<bool>("feature_extract_enable", p_pre->feature_enabled,
-                 false);  // 是否提取特征点（FAST_LIO2默认不进行特征点提取）
+                 false);  // 특징점 추출 여부 (FAST_LIO2는 기본적으로 특징점 추출하지 않음)
   nh.param<bool>("mapping/extrinsic_est_en", extrinsic_est_en, true);
   nh.param<bool>("pcd_save/pcd_save_en", pcd_save_en,
-                 false);  // 是否将点云地图保存到PCD文件
+                 false);  // 포인트 클라우드 맵을 PCD 파일로 저장할지 여부
   nh.param<int>("pcd_save/interval", pcd_save_interval, -1);
   nh.param<vector<double>>(
       "mapping/extrinsic_T", extrinT,
-      vector<double>());  // 雷达相对于IMU的外参T（即雷达在IMU坐标系中的坐标）
+      vector<double>());  // 라이다와 IMU 간의 외부 파라미터 T (즉, IMU 좌표계에서의 라이다 좌표)
   nh.param<vector<double>>("mapping/extrinsic_R", extrinR,
-                           vector<double>());  // 雷达相对于IMU的外参R
+                           vector<double>());  // 라이다와 IMU 간의 외부 파라미터 R
 
   int ivox_nearby_type = 6;
   nh.param<float>("ivox_grid_resolution", ivox_options_.resolution_, 0.5);
@@ -554,7 +554,7 @@ int main(int argc, char** argv) {
   ivox = std::make_unique<MapType>(ivox_options_);
 
   cout << "Lidar_type: " << p_pre->lidar_type << endl;
-  // 初始化path的header（包括时间戳和帧id），path用于保存odemetry的路径
+  // path의 헤더 초기화 (타임스탬프 및 프레임 id 포함), path는 odometry 경로 저장에 사용
   path.header.stamp = ros::Time::now();
   path.header.frame_id = "camera_init";
 
@@ -589,8 +589,8 @@ int main(int argc, char** argv) {
       V3D(acc_cov, acc_cov, acc_cov), V3D(b_gyr_cov, b_gyr_cov, b_gyr_cov),
       V3D(b_acc_cov, b_acc_cov, b_acc_cov));
 
-  signal(SIGINT, SigHandle);  // 当程序检测到signal信号（例如ctrl+c） 时  执行
-                              // SigHandle 函数
+  signal(SIGINT, SigHandle);  // 프로그램이 시그널 (예: ctrl+c)을 감지하면
+                              // SigHandle 함수 실행
   ros::Rate rate(5000);
 
   while (ros::ok()) {
@@ -598,7 +598,7 @@ int main(int argc, char** argv) {
       break;
     ros::spinOnce();
 
-    if (sync_packages(Measures))  // 把一次的IMU和LIDAR数据打包到Measures
+    if (sync_packages(Measures))  // 한 번의 IMU와 LIDAR 데이터를 Measures에 패키징
     {
       double t00 = omp_get_wtime();
 
@@ -611,7 +611,7 @@ int main(int argc, char** argv) {
 
       p_imu1->Process(Measures, kf, feats_undistort);
 
-      // 如果feats_undistort为空 ROS_WARN
+      // feats_undistort가 비어있으면 ROS_WARN
       if (feats_undistort->empty() || (feats_undistort == NULL)) {
         ROS_WARN("No point, skip this scan!\n");
         continue;
@@ -625,7 +625,7 @@ int main(int argc, char** argv) {
                            ? false
                            : true;
 
-      // 点云下采样
+      // 포인트 클라우드 다운샘플링
       downSizeFilterSurf.setInputCloud(feats_undistort);
       downSizeFilterSurf.filter(*feats_down_body);
       feats_down_size = feats_down_body->points.size();
@@ -637,7 +637,7 @@ int main(int argc, char** argv) {
       }
 
       /*** iterated state estimation ***/
-      Nearest_Points.resize(feats_down_size);  // 存储近邻点的vector
+      Nearest_Points.resize(feats_down_size);  // 근접 포인트를 저장하는 벡터
       kf.update_iterated_dyn_share_modified(
           LASER_POINT_COV, feats_down_body, *ivox, Nearest_Points,
           NUM_MAX_ITERATIONS, extrinsic_est_en);

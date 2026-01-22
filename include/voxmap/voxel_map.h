@@ -8,7 +8,7 @@
 #include "voxmap/basic_voxel_node.h"
 #include "voxmap/voxel_index.h"
 
-// Faster-LIO中IVox类的简化版，移除了原版的前两个模板参数。其中ivox类型固定使用DEFAULT版（即论文中的Linear版），因此不再支持PHC版本。此外，还对KeyType进行了替换，用更加人性化的VoxelIndex类代替了原版的Eigen Matrix，但哈希函数保留了原版实现
+// Faster-LIO의 IVox 클래스의 간소화 버전으로, 원본의 처음 두 템플릿 파라미터를 제거했습니다. ivox 타입은 DEFAULT 버전(즉, 논문의 Linear 버전)을 고정적으로 사용하므로 PHC 버전은 더 이상 지원하지 않습니다. 또한 KeyType을 교체하여 원본의 Eigen Matrix 대신 보다 인간친화적인 VoxelIndex 클래스를 사용하지만, 해시 함수는 원본 구현을 유지했습니다.
 template <typename PointType = pcl::PointXYZ>
 class VoxelMap {
  public:
