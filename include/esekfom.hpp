@@ -13,33 +13,33 @@
 #include "use-ikfom.hpp"
 #include "voxmap/voxel_map.h"
 
-// 该hpp主要包含：广义加减法，前向传播主函数，计算特征点残差及其雅可比，ESKF主函数
+// 이 hpp는 주로 다음을 포함: 광의 가감법, 전방 전파 메인 함수, 특징점 잔차 및 야코비 계산, ESKF 메인 함수
 
-const double epsi = 0.001;  // ESKF迭代时，如果dx<epsi 认为收敛
+const double epsi = 0.001;  // ESKF 반복 시, dx<epsi이면 수렴으로 간주
 
 namespace esekfom {
 using namespace Eigen;
 
-// 特征点在地图中对应的平面参数(平面的单位法向量,以及当前点到平面距离)
+// 특징점이 맵에서 대응하는 평면 파라미터 (평면의 단위 법향벡터 및 현재 점에서 평면까지의 거리)
 PointCloudXYZI::Ptr normvec(new PointCloudXYZI(100000, 1));
-PointCloudXYZI::Ptr laserCloudOri(new PointCloudXYZI(100000, 1));  // 有效特征点
+PointCloudXYZI::Ptr laserCloudOri(new PointCloudXYZI(100000, 1));  // 유효 특징점
 PointCloudXYZI::Ptr corr_normvect(
-    new PointCloudXYZI(100000, 1));      // 有效特征点对应点法相量
-bool point_selected_surf[100000] = {1};  // 判断是否是有效特征点
+    new PointCloudXYZI(100000, 1));      // 유효 특징점에 대응하는 법향벡터
+bool point_selected_surf[100000] = {1};  // 유효 특징점인지 판단
 
 struct dyn_share_datastruct {
-  bool valid;     // 有效特征点数量是否满足要求
-  bool converge;  // 迭代时，是否已经收敛
-  Eigen::Matrix<double, Eigen::Dynamic, 1> h;  // 残差	(公式(14)中的z)
+  bool valid;     // 유효 특징점 수량이 요구사항을 만족하는지
+  bool converge;  // 반복 시 이미 수렴했는지
+  Eigen::Matrix<double, Eigen::Dynamic, 1> h;  // 잔차 (식(14)의 z)
   Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic>
-      h_x;  // 雅可比矩阵H (公式(14)中的H)
+      h_x;  // 야코비 행렬 H (식(14)의 H)
 };
 
-// s-fast-lio中的esekf类。不同于与原版（fast-lio和faster-lio中的对应实现）之处不仅在于readme中所提到的用Sophus和Eigen代替MTK，以及更换了模型（移除与重力加速度相关的部分）。作者还舍弃了原版的各种函数指针，将很多具体的计算单元（例如计算h）移动到esekf中。因此这个类目前是与fast-lio中提出的具体状态-测量模型绑定的
+// s-fast-lio의 esekf 클래스. 원본(fast-lio와 faster-lio의 대응 구현)과의 차이점은 readme에서 언급된 Sophus와 Eigen으로 MTK를 대체한 것뿐만 아니라, 모델을 변경(중력 가속도 관련 부분 제거)한 것입니다. 또한 작성자는 원본의 다양한 함수 포인터를 제거하고, 많은 구체적인 계산 단위(예: h 계산)를 esekf로 이동했습니다. 따라서 이 클래스는 현재 fast-lio에서 제안된 구체적인 상태-측정 모델과 결합되어 있습니다
 class esekf {
  public:
-  typedef Matrix<double, 24, 24> cov;              // 24X24的协方差矩阵
-  typedef Matrix<double, 24, 1> vectorized_state;  // 24X1的向量
+  typedef Matrix<double, 24, 24> cov;              // 24x24 공분산 행렬
+  typedef Matrix<double, 24, 1> vectorized_state;  // 24x1 벡터
 
   esekf(){};
   ~esekf(){};
@@ -52,7 +52,7 @@ class esekf {
 
   void change_P(cov& input_cov) { P_ = input_cov; }
 
-  // 广义加法  公式(4)
+  // 광의 덧셈 식(4)
   state_ikfom boxplus(state_ikfom x, Eigen::Matrix<double, 24, 1> f_) {
     state_ikfom x_r;
     x_r.pos = x.pos + f_.block<3, 1>(0, 0);
@@ -70,25 +70,25 @@ class esekf {
     return x_r;
   }
 
-  // 前向传播  公式(4-8)
+  // 전방 전파 식(4-8)
   void predict(double& dt,
                Eigen::Matrix<double, 12, 12>& Q,
                const input_ikfom& i_in) {
-    Eigen::Matrix<double, 24, 1> f_ = get_f(x_, i_in);     // 公式(3)的f
-    Eigen::Matrix<double, 24, 24> f_x_ = df_dx(x_, i_in);  // 公式(7)的df/dx
-    Eigen::Matrix<double, 24, 12> f_w_ = df_dw(x_, i_in);  // 公式(7)的df/dw
+    Eigen::Matrix<double, 24, 1> f_ = get_f(x_, i_in);     // 식(3)의 f
+    Eigen::Matrix<double, 24, 24> f_x_ = df_dx(x_, i_in);  // 식(7)의 df/dx
+    Eigen::Matrix<double, 24, 12> f_w_ = df_dw(x_, i_in);  // 식(7)의 df/dw
 
-    x_ = boxplus(x_, f_ * dt);  // 前向传播 公式(4)
+    x_ = boxplus(x_, f_ * dt);  // 전방 전파 식(4)
 
     f_x_ = Matrix<double, 24, 24>::Identity() +
-           f_x_ * dt;  // 之前Fx矩阵里的项没加单位阵，没乘dt   这里补上
+           f_x_ * dt;  // 이전 Fx 행렬의 항에 단위 행렬을 더하지 않았고 dt를 곱하지 않음, 여기서 보충
 
     P_ =
         (f_x_)*P_ * (f_x_).transpose() +
-        (dt * f_w_) * Q * (dt * f_w_).transpose();  // 传播协方差矩阵，即公式(8)
+        (dt * f_w_) * Q * (dt * f_w_).transpose();  // 공분산 행렬 전파, 즉 식(8)
   }
 
-  // 计算每个特征点的残差及H矩阵
+  // 각 특징점의 잔차 및 H 행렬 계산
   void h_share_model(dyn_share_datastruct& ekfom_data,
                      PointCloudXYZI::Ptr& feats_down_body,
                      VoxelMap<PointType>& ivox,
@@ -107,7 +107,7 @@ class esekf {
           PointType point_world;
 
           V3D p_body(point_body.x, point_body.y, point_body.z);
-          // 把Lidar坐标系的点先转到IMU坐标系，再根据前向传播估计的位姿x，转到世界坐标系
+          // Lidar 좌표계의 점을 먼저 IMU 좌표계로 변환한 후, 전방 전파로 추정된 자세 x에 따라 월드 좌표계로 변환
           V3D p_global(x_.rot * (x_.offset_R_L_I * p_body + x_.offset_T_L_I) +
                        x_.pos);
           point_world.x = p_global(0);
@@ -116,38 +116,38 @@ class esekf {
           point_world.intensity = point_body.intensity;
 
           vector<float> pointSearchSqDis(NUM_MATCH_POINTS);
-          // Nearest_Points[i]打印出来发现是按照离point_world距离，从小到大的顺序的vector
+          // Nearest_Points[i]를 출력해보니 point_world까지의 거리 기준으로 작은 것부터 큰 순서로 정렬된 vector임을 발견
           auto& points_near = Nearest_Points[i];
 
           if (ekfom_data.converge) {
-            // 寻找point_world的最近邻的平面点
+            // point_world의 최근접 평면점 찾기
             ivox.GetClosestPoint(point_world, points_near, NUM_MATCH_POINTS);
 
-            // 判断是否是有效匹配点，与loam系列类似，要求特征点最近邻的地图点数量>阈值，距离<阈值
-            // 满足条件的才置为true
+            // 유효한 매칭점인지 판단, loam 시리즈와 유사하게 특징점 최근접 맵 포인트 수량>임계값, 거리<임계값 요구
+            // 조건을 만족하는 경우만 true로 설정
             point_selected_surf[i] =
                 points_near.size() < NUM_MATCH_POINTS        ? false
                 : pointSearchSqDis[NUM_MATCH_POINTS - 1] > 5 ? false
                                                              : true;
           }
           if (!point_selected_surf[i])
-            return;  // 如果该点不满足条件  不进行下面步骤
+            return;  // 해당 점이 조건을 만족하지 않으면 다음 단계를 진행하지 않음
 
-          Matrix<float, 4, 1> pabcd;  // 平面点信息
-          // 将该点设置为无效点，用来判断是否满足条件
+          Matrix<float, 4, 1> pabcd;  // 평면점 정보
+          // 해당 점을 무효점으로 설정하여 조건 만족 여부 판단
           point_selected_surf[i] = false;
-          // 拟合平面方程ax+by+cz+d=0并求解点到平面距离
+          // 평면 방정식 ax+by+cz+d=0 피팅 및 점에서 평면까지 거리 계산
           if (esti_plane(pabcd, points_near, 0.1f)) {
             float pd2 = pabcd(0) * point_world.x + pabcd(1) * point_world.y +
                         pabcd(2) * point_world.z +
-                        pabcd(3);  // 当前点到平面的距离
+                        pabcd(3);  // 현재 점에서 평면까지의 거리
 
-            // 如果残差大于经验阈值，则认为该点是有效点简言之，距离原点越近的lidar点要求点到平面的距离越苛刻
+            // 잔차가 경험적 임계값보다 크면 해당 점을 유효점으로 간주, 즉 원점에 가까운 lidar 점일수록 점에서 평면까지 거리에 대한 요구사항이 엄격함
             float s = 1 - 0.9 * fabs(pd2) / sqrt(p_body.norm());
-            // 如果残差大于阈值，则认为该点是有效点
+            // 잔차가 임계값보다 크면 해당 점을 유효점으로 간주
             if (s > 0.9) {
               point_selected_surf[i] = true;
-              // 存储平面的单位法向量  以及当前点到平面距离
+              // 평면의 단위 법향벡터 및 현재 점에서 평면까지 거리 저장
               normvec->points[i].x = pabcd(0);
               normvec->points[i].y = pabcd(1);
               normvec->points[i].z = pabcd(2);
@@ -156,14 +156,14 @@ class esekf {
           }
         });
 
-    int effct_feat_num = 0;  // 有效特征点的数量
+    int effct_feat_num = 0;  // 유효 특징점의 수량
     for (int i = 0; i < feats_down_size; i++) {
-      if (point_selected_surf[i])  // 对于满足要求的点
+      if (point_selected_surf[i])  // 요구사항을 만족하는 점에 대해
       {
         laserCloudOri->points[effct_feat_num] =
-            feats_down_body->points[i];  // 把这些点重新存到laserCloudOri中
+            feats_down_body->points[i];  // 이 점들을 laserCloudOri에 다시 저장
         corr_normvect->points[effct_feat_num] =
-            normvec->points[i];  // 存储这些点对应的法向量和到平面的距离
+            normvec->points[i];  // 이 점들에 대응하는 법향벡터와 평면까지의 거리 저장
         effct_feat_num++;
       }
     }
@@ -174,7 +174,7 @@ class esekf {
       return;
     }
 
-    // 雅可比矩阵H和残差向量的计算
+    // 야코비 행렬 H와 잔차 벡터 계산
     ekfom_data.h_x = MatrixXd::Zero(effct_feat_num, 12);
     ekfom_data.h.resize(effct_feat_num);
 
@@ -187,11 +187,11 @@ class esekf {
       M3D point_I_crossmat;
       point_I_crossmat << SKEW_SYM_MATRX(point_I_);
 
-      // 得到对应的平面的法向量
+      // 대응하는 평면의 법향벡터 획득
       const PointType& norm_p = corr_normvect->points[i];
       V3D norm_vec(norm_p.x, norm_p.y, norm_p.z);
 
-      // 计算雅可比矩阵H
+      // 야코비 행렬 H 계산
       V3D C(x_.rot.matrix().transpose() * norm_vec);
       V3D A(point_I_crossmat * C);
       if (extrinsic_est) {
@@ -203,12 +203,12 @@ class esekf {
             VEC_FROM_ARRAY(A), 0.0, 0.0, 0.0, 0.0, 0.0, 0.0;
       }
 
-      // 残差：点面距离
+      // 잔차: 점-평면 거리
       ekfom_data.h(i) = -norm_p.intensity;
     }
   }
 
-  // 广义减法
+  // 광의 뺄셈
   vectorized_state boxminus(state_ikfom x1, state_ikfom x2) {
     vectorized_state x_r = vectorized_state::Zero();
 
@@ -244,16 +244,16 @@ class esekf {
     dyn_share.valid = true;
     dyn_share.converge = true;
     int t = 0;
-    // 这里的x_和P_分别是经过正向传播后的状态量和协方差矩阵，因为会先调用predict函数再调用这个函数
+    // 여기서 x_와 P_는 각각 전방 전파 후의 상태량과 공분산 행렬, predict 함수를 먼저 호출한 후 이 함수를 호출하기 때문
     state_ikfom x_propagated = x_;
     cov P_propagated = P_;
 
-    vectorized_state dx_new = vectorized_state::Zero();  // 24X1的向量
+    vectorized_state dx_new = vectorized_state::Zero();  // 24x1 벡터
 
-    // maximum_iter是卡尔曼滤波的最大迭代次数
+    // maximum_iter는 칼만 필터의 최대 반복 횟수
     for (int i = -1; i < maximum_iter; i++) {
       dyn_share.valid = true;
-      // 计算雅克比，也就是点面残差的导数 H(代码里是h_x)
+      // 야코비 계산, 즉 점-평면 잔차의 도함수 H (코드에서는 h_x)
       h_share_model(dyn_share, feats_down_body, ivox, Nearest_Points,
                     extrinsic_est);
 
@@ -262,31 +262,31 @@ class esekf {
       }
 
       vectorized_state dx;
-      dx_new = boxminus(x_, x_propagated);  // 公式(18)中的 x^k - x^
+      dx_new = boxminus(x_, x_propagated);  // 식(18)의 x^k - x^
 
-      // 由于H矩阵是稀疏的，只有前12列有非零元素，后12列是零
-      // 因此这里采用分块矩阵的形式计算 减少计算量
-      auto H = dyn_share.h_x;  // m X 12 的矩阵
-      // 矩阵 H^T * H
+      // H 행렬은 희소 행렬로 처음 12열만 0이 아닌 원소를 가지며, 나머지 12열은 0
+      // 따라서 여기서는 블록 행렬 형태로 계산하여 계산량 감소
+      auto H = dyn_share.h_x;  // m x 12 행렬
+      // 행렬 H^T * H
       Eigen::Matrix<double, 24, 24> HTH = Matrix<double, 24, 24>::Zero();
       HTH.block<12, 12>(0, 0) = H.transpose() * H;
 
       auto K_front = (HTH / R + P_.inverse()).inverse();
       Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> K;
-      // 卡尔曼增益  这里R视为常数
+      // 칼만 게인, 여기서 R은 상수로 간주
       K = K_front.block<24, 12>(0, 0) * H.transpose() / R;
 
-      // 矩阵 K * H
+      // 행렬 K * H
       Eigen::Matrix<double, 24, 24> KH = Matrix<double, 24, 24>::Zero();
       KH.block<24, 12>(0, 0) = K * H;
-      // 公式(18)
+      // 식(18)
       Matrix<double, 24, 1> dx_ =
           K * dyn_share.h + (KH - Matrix<double, 24, 24>::Identity()) * dx_new;
-      x_ = boxplus(x_, dx_);  // 公式(18)
+      x_ = boxplus(x_, dx_);  // 식(18)
 
       dyn_share.converge = true;
       for (int j = 0; j < 24; j++) {
-        // 如果dx>epsi 认为没有收敛
+        // dx>epsi이면 수렴하지 않은 것으로 간주
         if (std::fabs(dx_[j]) > epsi) {
           dyn_share.converge = false;
           break;
@@ -296,13 +296,13 @@ class esekf {
       if (dyn_share.converge)
         t++;
 
-      // 如果迭代了3次还没收敛强制令成true，h_share_model函数中会重新寻找近邻点
+      // 3번 반복해도 수렴하지 않으면 강제로 true로 설정, h_share_model 함수에서 근접점을 다시 찾음
       if (!t && i == maximum_iter - 2) {
         dyn_share.converge = true;
       }
 
       if (t > 1 || i == maximum_iter - 1) {
-        P_ = (Matrix<double, 24, 24>::Identity() - KH) * P_;  // 公式(19)
+        P_ = (Matrix<double, 24, 24>::Identity() - KH) * P_;  // 식(19)
         return;
       }
     }
