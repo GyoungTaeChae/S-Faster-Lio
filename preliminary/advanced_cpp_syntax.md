@@ -69,27 +69,68 @@ ivox->AddPoints(points);
 
 ### 프로젝트에서의 실제 사용
 
+#### shared_ptr가 사용된 경우
+
 ```cpp
-// shared_ptr 예제
+// 1. 포인트 클라우드 — 여러 모듈이 공유 소유
 PointCloudXYZI::Ptr featsFromMap(new PointCloudXYZI());
+PointCloudXYZI::Ptr feats_undistort(new PointCloudXYZI());
+PointCloudXYZI::Ptr feats_down_body(new PointCloudXYZI());
 // PointCloudXYZI::Ptr는 boost::shared_ptr<PointCloudXYZI>의 별칭
 
+// 2. 전처리기 & IMU 프로세서
 shared_ptr<Preprocess> p_pre(new Preprocess());
-shared_ptr<ImuProcess> p_imu(new ImuProcess());
+shared_ptr<ImuProcess> p_imu1(new ImuProcess());
+```
 
-// unique_ptr 예제
+**왜 shared_ptr인가?**
+
+1. **포인트 클라우드 (`feats_undistort`, `feats_down_body` 등)**
+   - PCL 라이브러리의 API가 `boost::shared_ptr`을 요구한다. 예를 들어 `downSizeFilterSurf.setInputCloud(feats_undistort)`처럼 PCL 필터에 포인트 클라우드를 전달할 때 shared_ptr 타입을 받는다.
+   - 하나의 포인트 클라우드가 여러 곳에서 동시에 사용된다:
+     - `feats_undistort`는 IMU 프로세서(`p_imu1->Process()`)가 생성하고, 다운샘플 필터(`setInputCloud`)에 전달되며, 퍼블리싱(`dense_pub_en ? feats_undistort : feats_down_body`)에서도 참조된다.
+     - `feats_down_body`는 다운샘플 결과를 저장하면서, EKF 관측 모델(`h_share_model`)에도 전달되고, 좌표 변환(`pointBodyToWorld`) 등에서도 사용된다.
+   - 즉, **소유자가 하나가 아니라 여러 모듈**이 동일한 데이터를 참조하므로 shared_ptr이 적합하다.
+
+2. **전처리기 (`p_pre`)**
+   - 전역으로 선언되어 ROS 콜백 함수(`livox_pcl_cbk`, `standard_pcl_cbk`)에서 `p_pre->process()`로 호출되고, `main()`에서도 파라미터 설정(`p_pre->lidar_type` 등)과 구독자 생성 시 참조된다.
+   - 콜백과 메인 루프 등 **여러 실행 경로에서 공유**되는 객체이므로 shared_ptr을 사용한다.
+
+3. **IMU 프로세서 (`p_imu1`)**
+   - 메인 루프에서 `p_imu1->Process()`를 호출하고, 내부적으로 `last_imu_`, `cur_pcl_un_` 같은 shared_ptr 멤버를 `reset()`으로 재초기화한다.
+   - 프로세서 객체 자체가 여러 단계(초기화, 프로세싱, 리셋)에서 공유되는 자원이다.
+
+#### unique_ptr가 사용된 경우
+
+```cpp
 std::unique_ptr<MapType> ivox;
 ivox = std::make_unique<MapType>(ivox_options_);
 ```
 
-**왜 스마트 포인터를 사용하나?**
-- 자동 메모리 해제 (소멸자에서 자동으로 delete 호출)
-- 예외 안전성 보장
-- 소유권 의미가 명확함
+**왜 unique_ptr인가?**
+
+- `ivox`(복셀 맵)는 **단독 소유자가 명확한 자원**이다. `main()` 함수의 스코프에서 생성되고, 오직 그 스코프에서만 직접 접근한다:
+  - `ivox->AddPoints(PointToAdd)` — 포인트 추가
+  - `*ivox` — EKF 관측 모델에 역참조로 전달 (소유권 이전 없이 참조만)
+- 다른 모듈에 복셀 맵의 소유권을 공유할 필요가 없다. `h_share_model`에 전달할 때도 `*ivox`로 역참조하여 **참조(`VoxelMap&`)**로 넘기지, shared_ptr을 복사하지 않는다.
+- unique_ptr을 사용하면:
+  - **의도가 명확**: "이 객체의 소유자는 나 하나뿐이다"를 코드로 표현
+  - **오버헤드 제로**: shared_ptr의 참조 카운팅 비용이 없다
+  - **실수 방지**: 복사가 컴파일 타임에 차단되므로, 의도치 않은 소유권 공유를 원천 봉쇄
+
+#### 판단 기준 요약
+
+| 기준 | shared_ptr | unique_ptr |
+|------|-----------|------------|
+| **소유자 수** | 여러 모듈이 동시에 소유 | 단 하나의 소유자 |
+| **프로젝트 예시** | 포인트 클라우드 (PCL API + 여러 함수 공유) | 복셀 맵 (main에서만 소유) |
+| **다른 함수에 전달** | shared_ptr 자체를 복사하여 전달 | `*ivox`로 역참조 후 참조(`&`)로 전달 |
+| **오버헤드** | 참조 카운팅 비용 있음 | 없음 (원시 포인터와 동일) |
+| **선택 원칙** | "누가 마지막에 해제할지 모른다" | "내가 만들고 내가 해제한다" |
 
 **사용 위치:**
-- `src/laserMapping.cpp:70-75, 98, 554, 584` (shared_ptr)
-- `src/laserMapping.cpp:81` (unique_ptr)
+- `src/laserMapping.cpp:70-75, 98, 584` (shared_ptr)
+- `src/laserMapping.cpp:81, 554` (unique_ptr)
 - `src/IMU_Processing.hpp:101, 116, 117` (reset)
 
 ---
